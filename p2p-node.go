@@ -67,11 +67,11 @@ func RequestParse(c net.Conn) (pTmp Peer, pStat bool) {		// Функция па�
 	CheckError(err)
 
 	tmpStr := string(b[0:bytesRead])			// Преобразуем в строку
+	fmt.Printf("RequestParse:Полученные данные\n")		//DEBUG
 	fmt.Printf("%s\n", tmpStr)				//DEBUG
 
 	tmpArr := strings.Split(tmpStr, ":")			//(0)[GIVEPART]:(1)[part_num]:(2)[PORT]
 
-//	if len(tmpArr) == 2 {
 
 		if tmpArr[0] == "GIVEPART" {			// ok
 			pTmp = Peer{GetPeerIP(c) + ":" + tmpArr[2], tmpArr[1]}
@@ -80,10 +80,6 @@ func RequestParse(c net.Conn) (pTmp Peer, pStat bool) {		// Функция па�
 			pTmp = Peer{"XXX", "XXX"}
 			pStat = true
 		}
-//	} else {						// not ok
-//		pTmp = Peer{"XXX", "XXX"}
-//		pStat = true
-//	}
 	
 	return pTmp, pStat
 }
@@ -95,19 +91,22 @@ func (n *Node) PeerAdd(p Peer) {				// Добавление пира в глоб
 	}
 	n.peerCheck = true
 	n.Peers[p.Address] = p
-	fmt.Printf("Актуальный список пиров\n")
+	fmt.Printf("PeerAdd:Актуальный список пиров\n")		//DEBUG
 	
-	fmt.Printf("%q\n", n.Peers)
+	for i := range n.Peers {				//DEBUG
+		fmt.Printf("%q\n", n.Peers[i])			//DEBUG
+	}							//DEBUG
+//	fmt.Printf("%q\n", n.Peers)				//DEBUG
 
 }
 
 func SendPart(c net.Conn, p Peer) {				// Отправка данных обратно пиру
-	b := []byte("Take part:" + p.PartNum)
+	b := []byte("TAKEPART:" + "1")
 
 	bytesWrite, err := c.Write(b)				// Непосредственно запись в поток
 	CheckError(err)
 
-        fmt.Printf("Байт переданно %d\n", bytesWrite)           //DEBUG
+        fmt.Printf("SendPart:Байт переданно -  %d\n", bytesWrite)           //DEBUG
 	c.Close()
 }
 
@@ -118,16 +117,16 @@ func main() {							//
 	sid  := flag.String("s", "", "IP:Port раздающего сида (для пира)")
 	flag.Parse()
 
-	fmt.Printf("%s\n", flag.Args())				//DEBUG
+	fmt.Printf("Main:Аргументы - %s\n", flag.Args())	//DEBUG
 
 	n := NewNode(Peer{GetLocalIp() + ":" + port, "Всё"})
-	fmt.Printf("Локальная нода: %s\n", n.Self)		//DEBUG
+	fmt.Printf("Main:Локальная нода -  %s\n", n.Self)	//DEBUG
 
 	if *role == true {
-		fmt.Printf("Роль раздающего\n")
+		fmt.Printf("Main:Роль раздающего\n")
 		n.seeder()
 	} else {
-		fmt.Printf("Роль качающего\n")
+		fmt.Printf("Main:Роль качающего\n")
 		n.peerer(*sid)
 	}
 }
@@ -146,10 +145,9 @@ func (n *Node) seeder() {					// Поведение сида
 			n.PeerAdd(tmpPeer)			// Добавдение пира в список
 		}
 
-		go SendPart(c, tmpPeer)				// Отправка данных пиру
-		
-		fmt.Printf("Пир - %s - внесён в список\n", tmpPeer)	//DEBUG - Вывод сообщения о внесении в пиры
+		fmt.Printf("Seeder:Пир внесён в список- %s\n", tmpPeer)     //DEBUG - Вывод сообщения о внесении в пиры
 
+		go SendPart(c, tmpPeer)				// Отправка данных пиру
 		
 		
 	}
@@ -157,7 +155,7 @@ func (n *Node) seeder() {					// Поведение сида
 
 func (n *Node) peerer(ip string) {				// Поведение пира
 
-	b := []byte("GIVEPART:part99:8877")			// Тестовый запрос
+	b := []byte("GIVEPART:0:8877")				// Тестовый запрос
 	d := make([]byte, 4096) 
 
 	conn, err := net.Dial("tcp", ip)			// Установка соединения
@@ -166,14 +164,15 @@ func (n *Node) peerer(ip string) {				// Поведение пира
 	bytesWrite, err := conn.Write(b)			// Отправка инфы
 	CheckError(err)
 
-	fmt.Printf("Байт переданно %d\n", bytesWrite)		//DEBUG
+	fmt.Printf("Peerer:Байт переданно - %d\n", bytesWrite)	//DEBUG
 
 	bytesRead, err := conn.Read(d)				// Читаем ответ - не универсально
 	CheckError(err)
 
-	fmt.Printf("Байт получено: %d\n", bytesRead)		//DEBUG
+	fmt.Printf("Peerer:Байт получено - %d\n", bytesRead)	//DEBUG
 
-	tmpStr := string(d[0:bytesRead])			//DEBUG
+	tmpStr := string(d[0:bytesRead])			// Преобразуем в строку то что получили - не универсально
+	
 	fmt.Printf("%s\n", tmpStr)				//DEBUG
 
 //	os.Exit(0)
