@@ -21,14 +21,40 @@ type Peer struct {		// Структура хранит данные пира
 
 type Peers map[string]Peer	// Список пиров ввиде карты
 
-type Node struct {			// Структура локальной ноды
+type Node struct {		// Структура локальной ноды
 	Self		Peer
 	Peers		Peers
-
 	peerCheck	bool
 }
 
-func NewNode(self Peer) *Node {		// Функция инициализации экземпляра ноды
+//func counter(a string) string {			// Набираем 1012 символов XXX
+//	var str string = ""
+//	for i := 0; i < 1012; i++ {
+//		str = str + a
+//	}
+//	return str
+//}
+
+//func BytePart(p Peer) string {			// Временно генерим 1Кбайт инфы для тестовой отдачи XXXX
+//	var a string = ""
+//	switch p.PartNum {			// Раздаём 1012 символов
+//		case "0":
+//			a = counter("0")
+//		case "1":
+//			a = counter("1")
+//		case "2":
+//			a = counter("2")
+//	}
+//	return fmt.Sprintf("[%s]\n", a)
+//}
+
+func CheckError(err error) {            // Функция проверки ошибок
+	if err != nil {
+		log.Printf("Ошибка: %s\n", err)
+	}
+}
+
+func NewNode(self Peer) *Node {         	// Функция инициализации экземпляра ноды
 	n := new(Node)
 	n.Self = self
 	n.Peers = make(Peers)
@@ -36,21 +62,9 @@ func NewNode(self Peer) *Node {		// Функция инициализации э
 	return n
 }
 
-func CheckError(err error) {		// Функция проверки ошибок
-	if err != nil {
-		log.Printf("Ошибка: %s\n", err)
-	}
-}
-
-func GetPeerIP(c net.Conn) string {				// Функция вырезания адреса из соединения - возвращает строку с "IP"
-	str := c.RemoteAddr().String()
-	str = strings.Split(str, ":")[0]
-	return str
-}
-
-func GetLocalIp() string {					// Определение локального ip адреса - возвращает строку с "IP"
-	host, _ := os.Hostname()
-	addrs, _ := net.LookupIP(host)
+func GetLocalIp() string {			// Определение локального ip адреса - возвращает строку с "IP"
+	host, _ := os.Hostname()                                
+	addrs, _ := net.LookupIP(host)                          
 	for _, addr := range addrs {
 		if ipv4 := addr.To4(); ipv4 != nil {
 			return fmt.Sprintf("%s", ipv4)
@@ -59,150 +73,101 @@ func GetLocalIp() string {					// Определение локального ip
 	return "localhost"
 }
 
-func RequestParse(c net.Conn) (pTmp Peer, pStat bool) {		// Функция парсит запрос -  возвращает Peer
+func GetPeerIP(c net.Conn) string {		// Функция вырезания адреса из соединения - возвращает строку с "IP"
+	str := c.RemoteAddr().String()
+	str = strings.Split(str, ":")[0]
+	return str
+}
 
-	b := make([]byte, 4096)
+func main() {					// MAIN()
+	file := flag.String("f", "", "Путь до файла раздачи (для сида)")
+	sid  := flag.String("s", "", "IP:Port раздающего сида (для пира)")
+	flag.Parse()
+//	fmt.Printf("Main:Аргументы - %s\n", flag.Args())	//DEBUG
+	if file != "" {
+		partNum, err := GenPartList(*file)			//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	} else {
+		partNum := 0
+	}
+	CheckError(err)
+	n := NewNode(Peer{GetLocalIp() + ":" + port, partNum})	// Создание экземпляра ноды
+//	fmt.Printf("Main:Локальная нода -  %s\n", n.Self)	//DEBUG
+	n.Waiter(*sid)
+}
+
+func (n *Node) Waiter(sid *string) {				//!!!!!!!!!!!!Проверить тип!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	ln, err := net.Listen("tcp", ":" + port)                // Встаём на прослушку
+	CheckError(err)
+	
+	for {
+		c, err := ln.Accept()				// Ловим соединение
+		CheckError(err)
+		n.ParseRequest(c)				// Парсим запрос
+	}
+}
+
+func (n *Node) ParseRequest(c *net.Conn) {
+	b := make([]byte, 4096) 				// 4Kb Буфер
 	bytesRead, err := c.Read(b)				// Читаем байты из потока
 	CheckError(err)
 
 	tmpStr := string(b[0:bytesRead])			// Преобразуем в строку
-	fmt.Printf("RequestParse:Полученные данные\n")		//DEBUG
-	fmt.Printf("%s\n", tmpStr)				//DEBUG
+	tmpArr := strings.Split(tmpStr, ":")			// Разделяем на части в массив
 
-	tmpArr := strings.Split(tmpStr, ":")			// (0)[GIVEPART]:(1)[part_num]:(2)[PORT]
-
-		if tmpArr[0] == "GIVEPART" {			// ok
-			pTmp = Peer{GetPeerIP(c) + ":" + tmpArr[2], tmpArr[1]}
-			pStat = false
-		} else {					// not ok
-			pTmp = Peer{"XXX", "XXX"}
-			pStat = true
-		}
-	
-	return pTmp, pStat
+	switch tmpArr[0] {
+	case "GIVEPART":							// [GIVEPART]:[PORT]:[PART]
+		tmpPeer := Peer{GetPeerIP(c) + ":" + tmpArr[1], tmpArr[2]}	// Получаем свежего пира
+		n.PeerAdd(tmpPeer)						// Добавляем в список
+		go SendAnswer(c, tmpArr[2])					// Отвечаем пиру
+	case "TAKEPART":							// [TAKEPART]:[PORT]:[PART]:[DATA]
+		WritePart(tmpArr[2], tmpArr[3])					//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	case "PEERSUPD":							// [PEERSUPD]:[PORT]:[LIST]
+		n.PeerListUpdate(tmpArr[2])					//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	}
 }
 
-func (n *Node) PeerAdd(p Peer) {				// Добавление пира в глобальный список ноды
-	_, ok := n.Peers[p.Address]				// Ищем в мапе по адресу (ключу) пира
-	fmt.Printf("PeerAdd:Ищем пира в списке -  %t\n", ok)	//DEBUG
-
-	if ok != true {						// Не нашли
-		fmt.Printf("PeerAdd:Добавляем пира\n")		//DEBUG
-		n.peerCheck = true
-//		n.Peers[p.Address] = p
-	} else {						// Нашли
-		fmt.Printf("PeerAdd:Пир в списке - обновляем части\n")	//DEBUG
-//		n.Peers[p.Address] = p
+func (n *Node) PeerAdd(p Peer) {                                // Добавление пира в глобальный список ноды
+	_, ok := n.Peers[p.Address]                             // Ищем в мапе по адресу (ключу) пира
+	n.Peers[p.Address] = p
+	if ok != true {                                         // Не нашли
+		PushPeers()					//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	}
 	
-	n.Peers[p.Address] = p
-
 	fmt.Printf("PeerAdd:Актуальный список пиров\n")         //DEBUG
 	for i := range n.Peers {                                //DEBUG
-	        fmt.Printf("%q\n", n.Peers[i])                  //DEBUG
+		fmt.Printf("%q\n", n.Peers[i])                  //DEBUG
 	}                                                       //DEBUG
-
 }
 
-func SendPart(c net.Conn, p Peer) {					// Отправка данных обратно пиру
-
-	b := []byte("TAKEPART:" + p.PartNum + ":" + BytePart(p))	// Формируем буфер для ответа, считывая нужную нам часть
-
-	bytesWrite, err := c.Write(b)					// Непосредственно запись в поток
-	CheckError(err)
-
-        fmt.Printf("SendPart:Байт переданно -  %d\n", bytesWrite)	//DEBUG
-	c.Close()							// Отдали данные части, закрыли коннект и забыли
-}
-
-func counter(a string) string {			// Набираем 1012 символов
-	var str string = ""
-	for i := 0; i < 1012; i++ {
-		str = str + a
-	}
-	return str
-}
-
-func BytePart(p Peer) string {			// ТЕСТОВАЯ ПРОСЛОЙКА	// Временно генерим 1Кбайт инфы для тестовой отдачи
-	var a string = ""
-
-	switch p.PartNum {			// Раздаём 1012 символов
-		case "0":
-			a = counter("0")
-		case "1":
-			a = counter("1")
-		case "2":
-			a = counter("2")
-	}
-
-	return fmt.Sprintf("[%s]\n", a)
-}
-
-func main() {							//
-
-	role := flag.Bool("r", true, "Роль ноды: сид - 1, пир - 0")
-//	file := flag.String("f", "", "Путь до файла раздачи (для сида)")
-	sid  := flag.String("s", "", "IP:Port раздающего сида (для пира)")
-	flag.Parse()
-
-	fmt.Printf("Main:Аргументы - %s\n", flag.Args())	//DEBUG
-
-	n := NewNode(Peer{GetLocalIp() + ":" + port, "Всё"})
-	fmt.Printf("Main:Локальная нода -  %s\n", n.Self)	//DEBUG
-
-	if *role == true {
-		fmt.Printf("Main:Роль раздающего\n")		//DEBUG
-		n.seeder()
-	} else {
-		fmt.Printf("Main:Роль качающего\n")		//DEBUG
-		n.peerer(*sid)
-	}
-}
-
-func (n *Node) seeder() {					// Поведение сида
-
-	ln, err := net.Listen("tcp", ":" + port)		// Встаём на прослушку
-	CheckError(err)
-
-	for {
-		c, err := ln.Accept()				// Приём соединения
-		CheckError(err)
-		
-		tmpPeer, errBool := RequestParse(c) 		// Чтение и обработка из потока - возвращает пира {адрес, часть}
-		if errBool == false {
-			n.PeerAdd(tmpPeer)			// Добавдение пира в список
-		}
-
-		fmt.Printf("Seeder:Отправляем данные пиру - %s\n", tmpPeer)     //DEBUG - Вывод сообщения о внесении в пиры
-
-		go SendPart(c, tmpPeer)				// Отправка данных пиру
-		
-		
-	}
-}
-
-func (n *Node) peerer(ip string) {				// Поведение пира
-
-	b := []byte("GIVEPART:1:8877")				// Тестовый запрос
-	d := make([]byte, 4096) 
-
-	conn, err := net.Dial("tcp", ip)			// Установка соединения
-	CheckError(err)
-
-	bytesWrite, err := conn.Write(b)			// Отправка инфы
-	CheckError(err)
-
-	fmt.Printf("Peerer:Байт переданно - %d\n", bytesWrite)	//DEBUG
-
-	bytesRead, err := conn.Read(d)				// Читаем ответ - не универсально
-	CheckError(err)
-
-	fmt.Printf("Peerer:Байт получено - %d\n", bytesRead)	//DEBUG
-
-	tmpStr := string(d[0:bytesRead])			// Преобразуем в строку то что получили - не универсально
+func (n *Node) PeerListUpdate(list map[string]Peer) {
 	
-	fmt.Printf("%s\n", tmpStr)				//DEBUG
+}
 
-//	os.Exit(0)
-// тут тоже кучу всего менять
+func PushPeers() {
+	
+}
+
+func SendAnswer(c *net.Conn, part string) {
+	tmpb, err := ReadPart(part)				// Cчитываем нужную нам часть
+	CheckError(err)
+
+	b := []byte("TAKEPART:" + p.PartNum + ":")		// Формируем буфер для ответа
+
+	bytesWrite, err := c.Write(b + tmpb)			// Непосредственно запись в поток
+	CheckError(err)
+
+	fmt.Printf("SendAnswer:Байт переданно -  %d\n", bytesWrite)       //DEBUG
+	c.Close()
+}
+
+func GenPartList(file string) {
+	
+}
+
+func WritePart(part string) {
+	
+}
+
+func ReadPart(part string) {
+	
 }
