@@ -1,7 +1,7 @@
 not ready yet
 
 as sid
-./p2p-node
+./p2p-node -of=file.name
 
 as peer
-./p2p-node -r=false -s=X.X.X.X:8877
+./p2p-node -if=file.name -t=X.X.X.X:8080
