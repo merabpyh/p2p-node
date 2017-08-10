@@ -1,262 +1,276 @@
 package main
 
 import (
-	"strconv"
+	"encoding/json"
 	"strings"
-//	"bytes"
+	"strconv"
+//	"time"
 	"flag"
 	"net"
 	"fmt"
-	"log"
 	"os"
 )
 
-var (	
-	peerList	Peers				// Список пиров
-	partList	Parts				// Список частей файла
-	port 		string 		= "8877"	// Порт по умоланию
-	sFile		os.File				// Сам файл раздачи
+type Peers map[string]int
+
+type Parts map[int]int64
+
+type Mssg struct {
+	Header	string	`json:"header"`
+	Part	int	`json:"part"`
+	Data	[]byte	`json:"data"`
+}
+
+var (
+	peerList	Peers
+	partSize	int64		= 2097152	// 2 Mbytes in bytes
+	partNums	int		= 0
+	partList	Parts
+	sFile		*os.File
+	fileSize	int64		= 0
+	port		string 		= "8080"
 )
 
-type Part struct {				// Данные части файла
-	Num		int			// Номер части
-	Seek		int64			// Смещение до первого байта части
-}
-
-type Peer struct {				// Данные пира
-	Address		string			// ip пира
-	Num		int			// Номер последней запрошенной этим пиром части
-	Con		net.Conn		// Соединение с этим пиром
-}
-
-type Peers map[string]Peer			// Список пиров ввиде мапы
-
-type Parts map[int]Part				// Список файла ввиде мапы
-
-func main() {					// MAIN()
+func main() {
 	var (
-		iFile = flag.String("if", "", "Путь до файла раздачи (для сида)")
-		oFile = flag.String("of", "", "Путь до файла раздачи (для пира)")
-		sid  = flag.String("s", "", "IP раздающего сида (для пира)")
-
+		iFile		= flag.String("if", "", "Путь до файла раздачи (для пида)")
+		oFile		= flag.String("of", "", "Путь до файла раздачи (для сира)")
+		targetAdr	= flag.String("t", "", "Адрес для запроса c портом 8080")
 	)
 
 	flag.Parse()
+	peerList = make(Peers)
+	partList = make(Parts)
 
-	fmt.Printf("Main:Аргументы - %s\n", flag.Args())        //DEBUG
+	fmt.Printf("MAIN: Init file\n")					//DEBUG
+	if *oFile != "" {
+		tmpFile, err := os.OpenFile(*oFile, os.O_RDONLY, 0755)
+		chkError(err)
 
-	if *sid != "" {
-		fmt.Printf("Main: Выбрана роль - ПИР\n")	//DEBUG
-		if *oFile != "" {
-			sFile, err := os.OpenFile(*oFile, os.O_RDWR|os.O_CREATE, 0755)        // Создаём файл с нуля
-			CheckError(err)
+		sFile = tmpFile
+		defer sFile.Close()
 
-			tmpPeer := Peer{*sid, 0, nil}			// Формируем первого пира, он же сид
+		tmpLstat, err := os.Lstat(*oFile)
+		chkError(err)
 
-			peerList[tmpPeer.Address] = tmpPeer		// Суём сида в мампу
+		fileSize = tmpLstat.Size()
+		fmt.Printf("Размер файла раздачи- %d байт\n", fileSize)	//DEBUG
 
-			c, err := net.Dial("tcp", *sid)			// Первый коннект всегда к сиду
-			CheckError(err)
+		Mapper()						// Обрабатывает данные файла
 
-			bw := []byte("INIT")
-			br := make([]byte, 10240)			// 10Kb Буфер
-			bytesWrite, err := c.Write(bw)			// Непосредственно запись в поток
-			bytesRead, err 	:= c.Read(br)			// Читаем байты из потока
-			
+		fmt.Printf("Размер части - %d байт\n", partSize)		//DEBUG
+		fmt.Printf("Кол-во частей - %v\n", partNums)			//DEBUG
+		fmt.Printf("Список частей со смещениями - %d\n", partList)	//DEBUG
 
-//!!!!			функция слушанья для iGET(oTAKE) и (iPUSHPEERS)		// Слушаем и получаем  свежий список пиров 
-										// Слушаем и получаем GET чтобы отдать TAKE
-		} else {
-			fmt.Printf("Main: Не указан выходной файл -of=\n")		//DEBUG
-			os.Exit(1)
-		}
+	} else if *iFile != "" {
+		tmpFile, err := os.OpenFile(*iFile, os.O_RDWR|os.O_CREATE, 0755)	// Создаём файл с нуля
+		chkError(err)
+
+		sFile = tmpFile
+		defer sFile.Close()
+		partNums = 0
+		partList[0] = int64(0)
+	}
+
+	fmt.Printf("Запускам слушателя\n")					//DEBUG
+	ln, err := net.Listen("tcp", ":" + port)
+	chkError(err)
+	defer ln.Close()
+
+	if *targetAdr != "" {
+		fmt.Printf("Режим пира\n")					//DEBUG
+		fmt.Printf("Коннект с сидом - %s\n\n", *targetAdr)		//DEBUG
+		go Loader(*targetAdr)
 	} else {
-		fmt.Printf("Main: Выбрана роль - СИД\n")				//DEBUG
-		if *iFile != "" {
-			sFile, err := os.OpenFile(*oFile, os.O_RDONLY, 0755)
-			CheckError(err)
+		fmt.Printf("Режим сида\n\n")					//DEBUG
+		peerList[GetLocalIp()] = partNums
+		fmt.Printf("Добавили себя, первого пира - %v\n", peerList)	//DEBUG
+	}
 
-//!!!!			partList, err := функция парсинга файла данных, для формирования списка частей
+	for {
+		conn, err := ln.Accept()
+		chkError(err)
+		s := conn.RemoteAddr().String()
+		s = strings.Split(s, ":")[0]
 
-			tmpAdr := GetLocalIp()						// Получаем свой внешний адрес
-			tmpPeer := Peer{tmpAdr, len(partList), nil}			// Формируем первого пира, это мы, мы и есть сид
+		tmpPart := Reader(conn, sFile)
+
+		if _, ok := peerList[s]; ok == false {		// Если нет пира с таким ключом в мапе
+
+			fmt.Printf("Добавлен пир: %s\n", s)		//DEBUG
+			peerList[s] = tmpPart				// Добавляем пира
 			
-			peerList[tmpPeer.Address]= tmpPeer				// Добавляем себя, сида, в список пиров
+			if *targetAdr == "" {
+				var ta Mssg
+				ta.Header = "PUSH"
+				ta.Part = 0
+				ta.Data = []byte(fmt.Sprintf("%v", peerList))
+				b, err := json.Marshal(ta)
+				chkError(err)
 
-//!!!!			функция слушанья для iGET(oTAKE) запускает go (oPUSHPEERS)	// При обращении нового пира, мы добавляем его в список и рассылаем всем
-											// Слушаем и получаем GET чтобы отдать TAKE
-//			for {
-				peerList.Worker()
-//			}
-
-		} else {
-			fmt.Printf("Main: Не указан входной файл -if=\n")		//DEBUG
-			os.Exit(1)
+				fmt.Printf("Текущий список пиров, обновляем у пиров: %v\n", peerList)	//DEBUG
+				for addr, _ := range peerList {
+					if addr != GetLocalIp() {
+						Dialer(addr + ":" + port, b)
+					}
+				}
+			}
+			fmt.Printf("\n")					//DEBUG
 		}
 	}
-//	fmt.Printf("Main:Локальная нода -  %s\n", GetLocalIp() + ":" + port)		//DEBUG
-//      os.Exit(0)
 }
 
-func CheckError(err error) {            // Функция проверки ошибок
-	if err != nil {
-		log.Printf("Ошибка: %s\n", err)
+func Mapper() {
+	if fileSize <= partSize {
+		partNums = 0
+		partList[0] = int64(0)
+	} else {
+		tmpStr := strconv.FormatInt(fileSize/ partSize, 10)
+		tmpNums, err := strconv.Atoi(tmpStr)
+		chkError(err)
+
+		partNums = tmpNums + 1                          // +1 На случай недобора последней части до 2 Мбайт
+		for i := 0; i < partNums; i++ {
+			partList[i] = int64(i) * partSize
+		}
 	}
 }
 
-func GetLocalIp() string {			// Определение локального ip адреса - возвращает строку с "IP"
-	host, _ := os.Hostname()                                
-	addrs, _ := net.LookupIP(host)                          
+func GetLocalIp() string {                      			//
+	host, _ := os.Hostname()
+	addrs, _ := net.LookupIP(host)
 	for _, addr := range addrs {
 		if ipv4 := addr.To4(); ipv4 != nil {
 			return fmt.Sprintf("%s", ipv4)
 		}
 	}
-	return "localhost"
+	return "localhost"						//!!!!!!!
 }
 
-func GetPeerIP(c net.Conn) string {		// Функция вырезания адреса из соединения - возвращает строку с "IP"
+func Dialer(ts string, msg []byte) {
+		conn, err := net.Dial("tcp", ts)
+		chkError(err)
+
+		writedByte, err := conn.Write(msg)
+		chkError(err)
+
+		fmt.Printf("Байт отправлено: %d\n", writedByte)	//DEBUG
+		conn.Close()
+}
+
+func chkError(err error) {
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func Reader(c net.Conn, f *os.File) int {
+	var (
+		a Mssg		// Входящее
+		ta Mssg		// Исходящее
+	)
+
 	s := c.RemoteAddr().String()
-	s = strings.Split(s, ":")[0]
-	return s
-}
+	tmpAddr := strings.Split(s, ":")[0]
 
-func (pl *Peers) Worker() {					//
-	ln, err := net.Listen("tcp", ":" + port)                // Встаём на прослушку
-	CheckError(err)
-	defer ln.Close()
+	b := make([]byte, partSize)
+	readedByte, err := c.Read(b)
+	chkError(err)
 
-//	Getter()
+	err = json.Unmarshal(b[0:readedByte],&a)
+	chkError(err)
 
-	for {
-		c, err := ln.Accept()				// Ловим соединение // Получаем запрос // Отправляем запрос
-		CheckError(err)
+	switch(a.Header) {
+		case "INITA":
+			fmt.Printf("Получен запрос на инициализацию\n")			//DEBUG
+			
+			ta.Header = "INITB"
+			ta.Part = 0
+			ta.Data = []byte(fmt.Sprintf("%d:%d", partNums, fileSize))
 
-		tmpAdr := GetPeerIP(c)				// Получаем адрес из коннекта
-		tmpPeer := Peer{tmpAdr, 0, c}			// Формируем пира по инфе из коннекта
+			tb, err := json.Marshal(ta)
+			chkError(err)
 
-		ok := PeerCheck(tmpPeer)			// Проверяем знаком ли пир
-		if ok == true {
-			pl.PushPeers()				// Пушим обновлённый список пиров всем пирам
-		}
-		
-	}
-}
+			Dialer(tmpAddr + ":" + port, tb)
+			fmt.Printf("Отправили ответ на инициализацию\n")		//DEBUG
+			
+		case "INITB":
+			fmt.Printf("Пришел ответ на инициализацию: %s\n", s)		//DEBUG
 
-func Getter() {
-	
-}
+			pInfo := strings.Split(string(a.Data), ":")
+			tmpNums, err := strconv.Atoi(pInfo[0])
+			tmpSize, err := strconv.ParseInt(pInfo[1] ,10,64)
+			chkError(err)
 
-func Parser() {
-	b := make([]byte, 10240) 				// 10Kb Буфер
-	bytesRead, err := n.Con.Read(b)				// Читаем байты из потока
-	CheckError(err)
+			partNums = tmpNums
+			fileSize = tmpSize
+			Mapper()
 
-	tmpStr := string(b[0:bytesRead])			// Преобразуем в строку
-	tmpArr := strings.Split(tmpStr, ":")			// Разделяем на части в массив
+			fmt.Printf("Получено кл-во частей: %d\n", partNums)			//DEBUG
+			fmt.Printf("Получен размер файла: %d\n", fileSize)			//DEBUG
+			fmt.Printf("Получен список частей со смещениями - %d\n", partList)	//DEBUG
 
-	switch tmpArr[0] {
-	case "GIVEPART":							// [GIVEPART]:[PORT]:[PART]
-		tmpPeer := Peer{GetPeerIP(n.Con) + ":" + tmpArr[1], tmpArr[2]}	// Получаем свежего пира
-		if n.PeerAdd(tmpPeer) == true { n.PushPeers() }			// Добавляем пира в мапу
-		go n.SendAnswer(tmpArr[2])					// Отвечаем пиру
-	case "TAKEPART":							// [TAKEPART]:[PORT]:[PART]:[DATA]
-		WritePart(tmpArr[2], tmpArr[3])					//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	case "PEERSUPD":							// [PEERSUPD]:[LIST]
-		n.PeerListUpdate(tmpArr[2])					// Обновляем список пиров !!! проверить тип !!!
-	}
-}
+//		case "GET":
+//			fmt.Printf("READER: GET part: %s\n", tmpArr[1])			//DEBUG
+//			tmpData := make([]byte, partSize)
+//			
+//			count, err := f.ReadAt(tmpData, partList[tmpPart])
+//			if err != nil {
+//				if err.Error() != "EOF" {
+//					chkError(err)
+//				}
+//			}
+//
+//			data := string(tmpData[0:count])
+//
+//			fmt.Printf("READER: Send TAKE\n")				//DEBUG
+//			Dialer(tmpAddr + ":" + port, "TAKE:" + tmpArr[1] + ":" + data)
 
-func  PeerCheck(p Peer) bool {			// Проверка на наличие пира в мапе
-	if tmpPeer, ok := peerList[p.Address]; ok == false {	// Если нет пира с таким ключом в мапе
-		peerList[p.Address] = p				// Добавляем пира
-		
-		return true
-	} else {
-		if tmpPeer != p {				// Сравнение пира выдернутого из локальной мапы с присланным пиром
-			a, _ := strconv.Atoi(tmpPeer.PartNum)
-			b, _ := strconv.Atoi(p.PartNum)
-			if a < b {
-				peerList[p.Address] = p		// Если значение части у присланного пира больше - перезаписываем на него
-				return true
+//		case "TAKE":
+//
+//			tmpData := []byte(tmpArr[2])
+//			_, err := f.WriteAt(tmpData, partList[tmpPart])
+//			chkError(err)
+//
+//			fmt.Printf("READER: TAKE: %s\n", tmpArr[2])	//DEBUG
+
+		case "PUSH":
+			fmt.Printf("Пришло обновление списка пиров\n")			//DEBUG
+			tmpStr := string(a.Data)
+			tmpStr = strings.Trim(tmpStr, "map[]")
+			tmpArr := strings.Split(tmpStr, " ")
+			for i := 0; i < len(tmpArr); i++ {
+				pInfo := strings.Split(tmpArr[i], ":")
+				if _, ok := peerList[pInfo[0]]; ok == false {
+					tint, err := strconv.Atoi(pInfo[1])
+					chkError(err)					
+					peerList[pInfo[0]] = tint
+				}
 			}
-		}
+			fmt.Printf("Список пиров после обновления - %v\n", peerList)		//DEBUG
 	}
-	return false						// Возввращаем bool, добавили - true, не добавили - false	
-//	fmt.Printf("PeerAdd:Актуальный список пиров\n")         //DEBUG
-//	for i := range n.Peers {                                //DEBUG
-//		fmt.Printf("%q\n", n.Peers[i])                  //DEBUG
-//	}                                                       //DEBUG
+	fmt.Printf("\n")						//DEBUG
+	return a.Part
 }
 
-func (n *Node) PeerListUpdate( l string) {		// Добавление пиров из присланного списка
-	peerList := strings.Split( l, ":")		// Разделяем входную строку на части по символу ":"
-	for key, value := range peerList {
-		tmpStr := strings.Split(value, " ")
-		n.PeerAdd(Peer{tmpStr[0], tmpStr[1]})	// Тут ловить ответ про добавление не нужно
+func Loader(ta string) {
+
+	a := Mssg{
+		Header:		"INITA",
+		Part:		0,
+		Data:		[]byte("0"),
 	}
-}
 
-func (pl *Peers) PushPeers() {
-	tmpStr := ""
-	for addr, peer := range n.Peers {
-		tmpStr = tmpStr + ":" + fmt.Sprint(peer)	// Добавляем в строчку каждого пира через ":"
-	}
-	b := []byte("PEERSUPD:" + tmpStr)		// Формируем буфер из строк
-	for addr, peer := range n.Peers {
-		c, err := net.Dial("tcp", peer.Address + ":" + port)    // Соединяемся c пиром из списка
-		CheckError(err)
+	b, err := json.Marshal(a)
+	chkError(err)
 
-		bytesWrite, err := c.Write(b)                           // Суём ему буфер
-		CheckError(err)
+	fmt.Printf("Отправлен запрос на инициализацию - %s\n", b)	//DEBUG
 
-		fmt.Printf("PushPeers:Байт переданно -  %d\n", bytesWrite)      //DEBUG
-		c.Close()                                               // Закрываем
-	}
-}
-
-func (n *Node) SendAnswer(part string) {
-	tmpb, err := ReadPart(part)				// Cчитываем нужную нам часть!!!!!!!!!
-	CheckError(err)
-
-	b := []byte("TAKEPART:" + part + ":")				// Формируем буфер для ответа
-
-	bytesWrite, err := n.Con.Write(b + tmpb)		// Непосредственно запись в поток
-	CheckError(err)
-
-	fmt.Printf("SendAnswer:Байт переданно -  %d\n", bytesWrite)       //DEBUG
-	n.Con.Close()
-}
-
-
-func GenPartList(file string) (int64, *os.File, error) {	// Генерируем карту смещений для файла раздачи
-	var partNums int64 = 0
-	f, err := os.Open(file)				// Открытие файла
-	CheckError(err)
-
-	tmpLstat, err := os.Lstat(file)
-	CheckError(err)
-
-//	tmpStat, err := f.Stat()
-//	CheckError(err)
-//	size := tmpStat.Size()
-	size := tmpLstat.Size()
-	fmt.Printf("GetPartList:Размер файла - %d байт\n", size)
-	partNums = size /10
-
-	if size >= 10000 {
-		partNums = size / 1000
-	} else {
-		if size >= 1000 {
-			partNums = size / 100
-		} else {
-			if size >= 100 {
-				partNums = size / 10
-			}
-		}
-	}	
-	
-//	f.Close()
-
-	return partNums, f, err
+	Dialer(ta, b)
+//	time.Sleep(1 * time.Second)
+//	for i, _ := range partList {
+//		Dialer(ta, "GET:" + strconv.Itoa(i))
+//		time.Sleep(1 * time.Second)	
+//	}
 }
