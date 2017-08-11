@@ -11,11 +11,17 @@ import (
 	"os"
 )
 
-// Peers : Карта содержащая список пиров (дописать инфу о частях)
+// Part : Структура соержит начало части и флажок наличия
+type Part struct {
+	Offset int64
+	Placed bool
+}
+
+// Peers : Карта содержащая список пиров
 type Peers map[string]int
 
-// Parts : Карта сожержащая начало области данных и номер части
-type Parts map[int]int64
+// Parts : Карта сожержит по номеру части структуру этой части
+type Parts map[int]Part
 
 // Mssg : Структура для общения между нодами (сериализуется в json)
 type Mssg struct {
