@@ -17,10 +17,10 @@ type Part struct {
 	Placed bool
 }
 
-// Peers : Карта содержащая список пиров
+// Peers : Карта содержащая список пиров [ip]pNum
 type Peers map[string]int
 
-// Parts : Карта сожержит по номеру части структуру этой части
+// Parts : Карта сожержит по номеру части структуру этой части [pNum]Part{Offset,Placed}
 type Parts map[int]Part
 
 // Mssg : Структура для общения между нодами (сериализуется в json)
@@ -42,17 +42,29 @@ var (
 
 func main() {
 	var (
-		iFile     = flag.String("if", "", "Путь до файла раздачи (для пида)")
-		oFile     = flag.String("of", "", "Путь до файла раздачи (для сира)")
-		targetAdr = flag.String("t", "", "Адрес для запроса c портом 8080")
+		iFile     = flag.String("if", "", "Путь для принимаемого файла (для пида)")
+		oFile     = flag.String("of", "", "Путь до отдаваемого файла (для сида)")
+		targetAdr = flag.String("t", "", "Адрес для подключения к сиду (c портом 8080)")
 	)
 
 	flag.Parse()
 	peerList = make(Peers)
 	partList = make(Parts)
 
-	fmt.Printf("MAIN: Init file\n") //DEBUG
-	if *oFile != "" {
+	//---------------------------------CHECK INPUTS------------------------------------
+	if (*oFile == "") && (*iFile == "") {
+		fmt.Printf("Where is the file?\n")
+		flag.Usage()
+		os.Exit(1)
+	} else if (*iFile != "") && (*targetAdr == "") {
+		fmt.Printf("Where is the addr of seed?\n")
+		flag.Usage()
+		os.Exit(1)
+	}
+	//------------------------------------------------------------------------------
+
+	fmt.Printf("Инициализация файла\n") //DEBUG
+	if *oFile != "" {                   //SEED
 		tmpFile, err := os.OpenFile(*oFile, os.O_RDONLY, 0755)
 		chkError(err)
 
@@ -63,22 +75,22 @@ func main() {
 		chkError(err)
 
 		fileSize = tmpLstat.Size()
-		fmt.Printf("Размер файла раздачи- %d байт\n", fileSize) //DEBUG
+		fmt.Printf("Размер файла - %d байт\n", fileSize) //DEBUG
 
 		Mapper() // Обрабатывает данные файла
 
 		fmt.Printf("Размер части - %d байт\n", partSize)           //DEBUG
 		fmt.Printf("Кол-во частей - %v\n", partNums)               //DEBUG
-		fmt.Printf("Список частей со смещениями - %d\n", partList) //DEBUG
+		fmt.Printf("Список частей со смещениями - %v\n", partList) //DEBUG
 
-	} else if *iFile != "" {
+	} else if *iFile != "" { //PEER
 		tmpFile, err := os.OpenFile(*iFile, os.O_RDWR|os.O_CREATE, 0755) // Создаём файл с нуля
 		chkError(err)
 
 		sFile = tmpFile
 		defer sFile.Close()
 		partNums = 0
-		partList[0] = int64(0)
+		partList[0] = Part{0, false}
 	}
 
 	fmt.Printf("Запускам слушателя\n") //DEBUG
@@ -133,7 +145,7 @@ func main() {
 func Mapper() {
 	if fileSize <= partSize {
 		partNums = 0
-		partList[0] = int64(0)
+		partList[0] = Part{0, true}
 	} else {
 		tmpStr := strconv.FormatInt(fileSize/partSize, 10)
 		tmpNums, err := strconv.Atoi(tmpStr)
@@ -141,7 +153,8 @@ func Mapper() {
 
 		partNums = tmpNums + 1 // +1 На случай недобора последней части до 2 Мбайт
 		for i := 0; i < partNums; i++ {
-			partList[i] = int64(i) * partSize
+			//			partList[i] = int64(i) * partSize
+			partList[i] = Part{int64(i) * partSize, true}
 		}
 	}
 }
@@ -223,7 +236,7 @@ func Reader(c net.Conn, f *os.File) int {
 
 		fmt.Printf("Получено кл-во частей: %d\n", partNums)                //DEBUG
 		fmt.Printf("Получен размер файла: %d\n", fileSize)                 //DEBUG
-		fmt.Printf("Получен список частей со смещениями - %d\n", partList) //DEBUG
+		fmt.Printf("Получен список частей со смещениями - %v\n", partList) //DEBUG
 
 		//		case "GET":
 		//			fmt.Printf("READER: GET part: %s\n", tmpArr[1])			//DEBUG
