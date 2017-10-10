@@ -17,13 +17,13 @@ type Part struct {
 	Placed bool
 }
 
-// Peers : Карта содержащая список пиров [ip]pNum
+// Peers : Карта  списока пиров [ip]pNum
 type Peers map[string]int
 
-// Parts : Карта сожержит по номеру части структуру этой части [pNum]Part{Offset,Placed}
+// Parts : Карта структур частей по номеру [pNum]Part{Offset,Placed}
 type Parts map[int]Part
 
-// Mssg : Структура для общения между нодами (сериализуется в json)
+// Mssg : Структура сообщений нод (сериализуется в json)
 type Mssg struct {
 	Header string `json:"header"`
 	Part   int    `json:"part"`
@@ -53,11 +53,11 @@ func main() {
 
 	//---------------------------------CHECK INPUTS------------------------------------
 	if (*oFile == "") && (*iFile == "") {
-		fmt.Printf("Where is the file?\n")
+		fmt.Printf("Where is the files?\n")
 		flag.Usage()
 		os.Exit(1)
 	} else if (*iFile != "") && (*targetAdr == "") {
-		fmt.Printf("Where is the addr of seed?\n")
+		fmt.Printf("Where is the seed addr?\n")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -99,8 +99,7 @@ func main() {
 	defer ln.Close()
 
 	if *targetAdr != "" {
-		fmt.Printf("Режим пира\n")                         //DEBUG
-		fmt.Printf("Коннект с сидом - %s\n\n", *targetAdr) //DEBUG
+		fmt.Printf("Режим пира\nКоннект с сидом - %s\n\n", *targetAdr) //DEBUG
 		go Loader(*targetAdr)
 	} else {
 		fmt.Printf("Режим сида\n\n") //DEBUG
@@ -129,7 +128,7 @@ func main() {
 				b, err := json.Marshal(ta)
 				chkError(err)
 
-				fmt.Printf("Текущий список пиров, обновляем у пиров: %v\n", peerList) //DEBUG
+				fmt.Printf("Текущий список пиров, рассылаем: %v\n", peerList) //DEBUG
 				for addr, _ := range peerList {
 					if addr != GetLocalIP() {
 						Dialer(addr+":"+port, b)
