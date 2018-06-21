@@ -1,5 +1,23 @@
 package main
 
+/*
+	Памятка по именованию
+
+	peer - учасник сети
+		seed - пир с полным комплектом данных
+		leech - пир с не полным комплектом данных
+
+	Part - минимальная единица комплекта данных
+		Parts -
+
+	Peer -
+		Peers -
+
+	Message -
+
+
+*/
+
 import (
 	"encoding/json"
 	"strconv"
@@ -11,17 +29,17 @@ import (
 	"os"
 )
 
-// Part : Структура соержит начало части и флажок наличия
+// Part : Структура содержит "отступ до части" и "флажок наличия части"
 type Part struct {
 	Offset int64
 	Placed bool
 }
 
-// Peers : Карта  списока пиров [ip]pNum
-type Peers map[string]int
-
 // Parts : Карта структур частей по номеру [pNum]Part{Offset,Placed}
 type Parts map[int]Part
+
+// Peers : Карта  списка пиров [ip]pNum
+type Peers map[string]int
 
 // Mssg : Структура сообщений нод (сериализуется в json)
 type Mssg struct {
@@ -38,6 +56,8 @@ var (
 	sFile    *os.File
 	fileSize int64  //= 0
 	port     string = "8080"
+
+//	debug_mode bool = false
 )
 
 func main() {
@@ -45,6 +65,7 @@ func main() {
 		iFile     = flag.String("if", "", "Путь для принимаемого файла (для пида)")
 		oFile     = flag.String("of", "", "Путь до отдаваемого файла (для сида)")
 		targetAdr = flag.String("t", "", "Адрес для подключения к сиду (c портом 8080)")
+		//	debug_mode	= 		flag.String("d", "", "Отображать отладочные сообщения")
 	)
 
 	flag.Parse()
@@ -53,23 +74,25 @@ func main() {
 
 	//---------------------------------CHECK INPUTS------------------------------------
 	if (*oFile == "") && (*iFile == "") {
-		fmt.Printf("Where is the files?\n")
+		fmt.Printf("Paths to the files not specified \n")
 		flag.Usage()
 		os.Exit(1)
 	} else if (*iFile != "") && (*targetAdr == "") {
-		fmt.Printf("Where is the seed addr?\n")
+		fmt.Printf("Seed's address is not specified\n")
 		flag.Usage()
 		os.Exit(1)
 	}
 	//------------------------------------------------------------------------------
 
-	fmt.Printf("Инициализация файла\n") //DEBUG
-	if *oFile != "" {                   //SEED
+	fmt.Printf("File processing\n") //DEBUG
+	if *oFile != "" {               //SEED
 		tmpFile, err := os.OpenFile(*oFile, os.O_RDONLY, 0755)
 		chkError(err)
 
+		// ????????????
 		sFile = tmpFile
 		defer sFile.Close()
+		// ????????????
 
 		tmpLstat, err := os.Lstat(*oFile)
 		chkError(err)
